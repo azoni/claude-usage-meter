@@ -10,11 +10,14 @@ and weekly rate-limit windows, and when each resets, right above the prompt:
 5h ▰▰▰▱▱▱▱▱ 38% resets 3:40pm    Week ▰▰▰▰▰▰▰▱ 91% resets Fri 9am
 ```
 
-In VS Code it moves to the status bar at the bottom right (`5h 38% · Wk 91%`), with a
-table of reset times on hover.
+In VS Code it moves to the status bar at the bottom right (`5h 38% · Wk 91% · Fable 2%`),
+with a table of reset times on hover. Click it to refresh.
 
-The numbers are Anthropic's own rate-limit figures for your account, so they include
-usage from claude.ai and your other machines. They update after every reply.
+The numbers are Anthropic's own figures for your account, the same ones `/usage` shows, so
+they include usage from claude.ai, your other sessions and your other machines. The line
+above the prompt updates after every reply. The VS Code item also asks Claude Code for
+them every 2 minutes while VS Code is focused, so it stays current while you work
+elsewhere.
 
 ## Install
 
@@ -84,13 +87,20 @@ plugin updates and ships a newer one, Claude Code shows a one-line note at start
 
 - **Subscriptions only.** Pro, Max, Team and Enterprise accounts report these windows. An
   API key or a cloud provider has none, so the meter stays hidden.
-- **Per-model weekly limits** (such as a Fable-only week) aren't shown yet. Claude Code
-  doesn't pass them to plugins.
-- **Early-access API.** This uses Claude Code's plugin function hooks, which are early
-  access and may change between releases. Tested on Claude Code 2.1.314.
-- **Nothing leaves your machine.** The plugin reads the figures Claude Code already has and
-  writes them to `~/.claude/usage-meter/reading.json` for the VS Code extension. It sends
-  nothing anywhere and never touches your login.
+- **Per-model weekly limits** (such as a Fable-only week) show in VS Code. The line above
+  the prompt shows the 5-hour and weekly windows only, since those are what Claude Code
+  passes to plugins.
+- **Early-access APIs.** The plugin uses Claude Code's plugin function hooks, and the VS
+  Code item uses Claude Code's `get_usage` request; both are marked early access or
+  experimental and may change between releases. If the request stops working, the item
+  falls back to the numbers saved after each reply. Tested on Claude Code 2.1.314–2.1.317.
+- **Your login stays with Claude Code.** The plugin reads the figures Claude Code already
+  has and saves them to `~/.claude/usage-meter/`. The VS Code item runs the Claude Code
+  program that ships with the Claude extension and asks it for usage (the request behind
+  `/usage`). That uses no model tokens and saves no session history. Neither part reads
+  your login or sends anything anywhere else.
+- **Something wrong?** In VS Code, open the Output panel and pick "Claude usage meter".
+  It says why a refresh failed.
 - **Colors.** Green under 60%, yellow from 60%, red from 85%. The VS Code item turns the
   warning color at 85%.
 
@@ -99,7 +109,7 @@ plugin updates and ships a newer one, Claude Code shows a one-line note at start
 ```
 claude plugin uninstall usage-meter
 code --uninstall-extension azoni.usage-meter-statusbar
-rm -rf ~/.claude/usage-meter        # the saved reading and version files
+rm -rf ~/.claude/usage-meter        # the saved readings and version file
 ```
 
 ## Develop
@@ -107,6 +117,7 @@ rm -rf ~/.claude/usage-meter        # the saved reading and version files
 ```
 claude plugin validate .
 claude plugin test .
+node --test 'vscode/test/*.test.js'
 bash vscode/build.sh        # rebuilds vscode/usage-meter-statusbar.vsix
 ```
 

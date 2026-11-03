@@ -9,7 +9,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 mkdir "$work/extension"
-cp "$here/package.json" "$here/extension.js" "$here/icon.png" "$work/extension/"
+cp "$here/package.json" "$here/extension.js" "$here/meter.js" "$here/icon.png" "$work/extension/"
 
 cat > "$work/[Content_Types].xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
@@ -22,7 +22,7 @@ cat > "$work/extension.vsixmanifest" <<EOF
   <Metadata>
     <Identity Language="en-US" Id="usage-meter-statusbar" Version="$version" Publisher="azoni" />
     <DisplayName>Claude usage meter</DisplayName>
-    <Description xml:space="preserve">Shows your Claude plan usage (5-hour and weekly) in the status bar.</Description>
+    <Description xml:space="preserve">Shows your Claude plan usage (5-hour, weekly and per-model windows) in the status bar, refreshed from Claude Code.</Description>
     <Categories>Other</Categories>
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^1.80.0" />

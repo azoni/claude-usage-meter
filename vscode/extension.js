@@ -1,30 +1,35 @@
-// Shows the plan usage the usage-meter Claude Code plugin writes to
-// ~/.claude/usage-meter/reading.json in the status bar.
+// Shows Claude plan usage in the status bar. Two sources feed it: Claude Code
+// itself, asked every couple of minutes (meter.js), and the reading the
+// usage-meter Claude Code plugin saves after each reply. Each window shows
+// whichever is newer.
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const vscode = require('vscode')
 
+const { fetchUsage, mergeReadings, parseUsageResponse, present } = require('./meter')
+
 const DIR = path.join(os.homedir(), '.claude', 'usage-meter')
-const FILE = path.join(DIR, 'reading.json')
-const SHORT = { five_hour: '5h', seven_day: 'Wk', spend_limit: 'Spend' }
-const LONG = { five_hour: '5-hour window', seven_day: 'Week', spend_limit: 'Spend limit' }
-const BAR_CELLS = 10
-const STALE_MS = 15 * 60 * 1000
-const DAY_MS = 24 * 60 * 60 * 1000
-const WARN_PCT = 85
+// Written by the Claude Code plugin after each reply.
+const SESSION_FILE = path.join(DIR, 'reading.json')
+// Written here from Claude Code's own usage answer.
+const USAGE_FILE = path.join(DIR, 'usage.json')
+const POLL_MS = 2 * 60 * 1000
+// A refresh this recent, from this window or another, is fresh enough.
+const FRESH_MS = 60 * 1000
 
 const isLimit = limit =>
   typeof limit === 'object' &&
   limit !== null &&
   typeof limit.kind === 'string' &&
   Number.isFinite(limit.percentUsed) &&
-  (limit.resetsAt === undefined || typeof limit.resetsAt === 'string')
+  (limit.resetsAt === undefined || typeof limit.resetsAt === 'string') &&
+  (limit.label === undefined || typeof limit.label === 'string')
 
 // Keeps only well-formed windows, so a damaged file draws nothing odd.
-function readReading() {
+function readReading(file) {
   try {
-    const value = JSON.parse(fs.readFileSync(FILE, 'utf8'))
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'))
 
     if (!Array.isArray(value?.limits) || !Number.isFinite(value.at)) {
       return null
@@ -36,61 +41,80 @@ function readReading() {
   }
 }
 
-// A known window's name, or the kind itself stripped to plain word characters,
-// since the hover renders Markdown.
-const label = (names, kind) =>
-  Object.hasOwn(names, kind) ? names[kind] : kind.replace(/[^\w-]/g, '').slice(0, 32)
+function ageOf(file) {
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs
+  } catch {
+    return Infinity
+  }
+}
 
-const time = at => at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+// The claude program the Claude extension ships, else `claude` on the PATH.
+function claudeCommand() {
+  const claude = vscode.extensions.getExtension('anthropic.claude-code')
+  const bundled = claude && path.join(claude.extensionPath, 'resources', 'native-binary', process.platform === 'win32' ? 'claude.exe' : 'claude')
 
-function resetLabel(resetAt, now) {
-  const at = new Date(resetAt)
-  const day = resetAt - now > DAY_MS * 0.8 ? `${at.toLocaleDateString(undefined, { weekday: 'short' })} ` : ''
-
-  return `${day}${time(at)}`
+  return bundled && fs.existsSync(bundled)
+    ? { command: bundled, shell: false }
+    : { command: 'claude', shell: process.platform === 'win32' }
 }
 
 function render(item) {
-  const reading = readReading()
+  const shown = present(mergeReadings(readReading(SESSION_FILE), readReading(USAGE_FILE)), Date.now())
 
-  if (!reading || reading.limits.length === 0) {
+  if (!shown) {
     item.hide()
     return
   }
 
-  const now = Date.now()
-  const limits = reading.limits.map(limit => {
-    const resetAt = limit.resetsAt ? Date.parse(limit.resetsAt) : NaN
-    // A window that reset since the reading starts again from zero.
-    const hasReset = resetAt <= now
-
-    const pct = hasReset ? 0 : Math.max(0, Math.round(limit.percentUsed))
-
-    return { kind: limit.kind, pct, resetAt: hasReset ? NaN : resetAt }
-  })
-  const worst = Math.max(...limits.map(limit => limit.pct))
-
-  item.text = `$(dashboard) ${limits.map(limit => `${label(SHORT, limit.kind)} ${limit.pct}%`).join(' · ')}`
-  item.backgroundColor = worst >= WARN_PCT ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined
-
-  const rows = limits.map(limit => {
-    const filled = Math.min(BAR_CELLS, Math.round((limit.pct / 100) * BAR_CELLS))
-    const bar = '▰'.repeat(filled) + '▱'.repeat(BAR_CELLS - filled)
-    const reset = Number.isNaN(limit.resetAt) ? '' : resetLabel(limit.resetAt, now)
-
-    return `| ${label(LONG, limit.kind)} | \`${bar}\` | **${limit.pct}%** | ${reset} |`
-  })
-  const age = now - reading.at > STALE_MS ? `\n\n_As of ${time(new Date(reading.at))}: no Claude session has reported since._` : ''
-  const tooltip = new vscode.MarkdownString(`**Claude usage**\n\n| Window | | Used | Resets |\n|---|---|--:|---|\n${rows.join('\n')}${age}`)
-
-  item.tooltip = tooltip
+  item.text = shown.text
+  item.tooltip = new vscode.MarkdownString(shown.tooltip)
+  item.backgroundColor = shown.isWarning ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined
   item.show()
 }
 
 function activate(context) {
   const item = vscode.window.createStatusBarItem('usageMeter', vscode.StatusBarAlignment.Right, 100)
   item.name = 'Claude usage'
+  item.command = 'usageMeter.refresh'
+  const log = vscode.window.createOutputChannel('Claude usage meter')
   const refresh = () => render(item)
+  let isPolling = false
+  let lastAttempt = 0
+  let lastError
+
+  // Logs a failure once until it changes, so a steady problem doesn't fill the log.
+  const report = message => {
+    if (message !== lastError) {
+      lastError = message
+      log.appendLine(`${new Date().toISOString()} ${message}`)
+    }
+  }
+
+  const poll = async minAge => {
+    if (isPolling || Date.now() - lastAttempt < minAge || ageOf(USAGE_FILE) < minAge) {
+      return
+    }
+
+    isPolling = true
+    lastAttempt = Date.now()
+
+    try {
+      const { command, shell } = claudeCommand()
+      const reading = parseUsageResponse(await fetchUsage(command, { shell }), Date.now())
+
+      if (reading) {
+        fs.writeFileSync(USAGE_FILE, JSON.stringify(reading))
+        lastError = undefined
+      } else {
+        report('Claude Code answered with no usage windows: an API key or a cloud provider has none.')
+      }
+    } catch (error) {
+      report(`Could not ask Claude Code for usage: ${error.message}`)
+    } finally {
+      isPolling = false
+    }
+  }
 
   fs.mkdirSync(DIR, { recursive: true })
   // Lets the Claude plugin tell when this extension is older than the copy it
@@ -101,11 +125,25 @@ function activate(context) {
   const watcher = fs.watch(DIR, refresh)
   // If the folder goes away the watch ends; the timer below keeps drawing.
   watcher.on('error', () => watcher.close())
-  // Re-draw each minute too, so a window that resets drops to zero on time.
-  const timer = setInterval(refresh, 60 * 1000)
+  // Each minute: re-draw, so a window that resets drops to zero on time, and
+  // refresh from Claude Code while this window has focus.
+  const timer = setInterval(() => {
+    refresh()
 
-  context.subscriptions.push(item, { dispose: () => (watcher.close(), clearInterval(timer)) })
+    if (vscode.window.state.focused) {
+      poll(POLL_MS)
+    }
+  }, 60 * 1000)
+
+  context.subscriptions.push(
+    item,
+    log,
+    vscode.commands.registerCommand('usageMeter.refresh', () => poll(0)),
+    vscode.window.onDidChangeWindowState(state => state.focused && poll(FRESH_MS)),
+    { dispose: () => (watcher.close(), clearInterval(timer)) },
+  )
   refresh()
+  poll(FRESH_MS)
 }
 
 module.exports = { activate, deactivate() {} }
