@@ -4,6 +4,7 @@
   "description": "Shows your Claude plan usage (5-hour and weekly) in the status bar, from the usage-meter Claude Code plugin.",
   "version": "0.1.1",
   "publisher": "azoni",
+  "icon": "icon.png",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/azoni/claude-usage-meter" },
   "engines": { "vscode": "^1.80.0" },

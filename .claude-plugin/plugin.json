@@ -6,6 +6,7 @@
   "homepage": "https://github.com/azoni/claude-usage-meter",
   "repository": "https://github.com/azoni/claude-usage-meter",
   "license": "MIT",
+  "icon": "./assets/icon.png",
   "keywords": ["usage", "rate-limits", "limits", "status-bar", "vscode"],
   "types": "./types/index.d.ts"
 }

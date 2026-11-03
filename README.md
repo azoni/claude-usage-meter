@@ -1,3 +1,5 @@
+<img src="assets/icon.png" alt="" width="96" align="right">
+
 # Claude usage meter
 
 A live usage-limit tracker for Claude Code. See how much of your Claude plan (Pro, Max,
