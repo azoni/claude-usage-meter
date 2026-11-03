@@ -1,0 +1,11 @@
+{
+  "name": "usage-meter",
+  "version": "0.1.0",
+  "description": "Live Claude plan usage (5-hour and weekly windows, with reset times) above the prompt and in the VS Code status bar",
+  "author": { "name": "azoni", "url": "https://github.com/azoni" },
+  "homepage": "https://github.com/azoni/claude-usage-meter",
+  "repository": "https://github.com/azoni/claude-usage-meter",
+  "license": "MIT",
+  "keywords": ["usage", "rate-limits", "limits", "status-bar", "vscode"],
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "claude-usage-meter",
+  "owner": { "name": "azoni", "url": "https://github.com/azoni" },
+  "metadata": { "description": "A live Claude plan-usage meter for Claude Code and VS Code" },
+  "plugins": [
+    {
+      "name": "usage-meter",
+      "source": "./",
+      "description": "Live Claude plan usage (5-hour and weekly windows, with reset times) above the prompt and in the VS Code status bar"
+    }
+  ]
+}
