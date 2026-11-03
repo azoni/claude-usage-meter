@@ -25,6 +25,13 @@ for example `5h 38% · Wk 91%`, with a table of reset times on hover.
    plugin has had a reply (the reading file is written then). If it does not show after
    that, they can run "Developer: Reload Window" from the command palette.
 
+## Update
+
+The same steps install a newer extension over an older one. Claude Code shows a note at
+startup when the installed extension is older than the copy this plugin ships. After
+installing, the person reloads the window ("Developer: Reload Window") so the new version
+runs.
+
 ## Remove
 
 `<cli> --uninstall-extension azoni.usage-meter-statusbar`

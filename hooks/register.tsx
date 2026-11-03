@@ -14,6 +14,8 @@ const reading = atom({ plugin: 'usage-meter', key: 'reading' } as const, null, {
 const STORE_KEY = 'last-reading'
 // Where the VS Code status bar item reads the reading from.
 const READING_FILE = '.claude/usage-meter/reading.json'
+// Where the VS Code extension records its version when it starts.
+const EXTENSION_FILE = '.claude/usage-meter/extension.json'
 const LABELS: Record<string, string> = {
   five_hour: '5h',
   seven_day: 'Week',
@@ -33,6 +35,10 @@ const isReading = (value: unknown): value is Reading =>
   Array.isArray((value as Reading).limits) &&
   typeof (value as Reading).at === 'number'
 
+// USERPROFILE for Windows, where HOME is usually unset.
+const homeDir = async ($: EngineInterface) =>
+  (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+
 async function save($: EngineInterface, limits: readonly SessionRateLimit[]) {
   if (limits.length === 0) {
     return
@@ -42,11 +48,52 @@ async function save($: EngineInterface, limits: readonly SessionRateLimit[]) {
   await update($, reading, () => latest)
   await $.store.set(STORE_KEY, latest)
 
-  // USERPROFILE for Windows, where HOME is usually unset.
-  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+  const home = await homeDir($)
 
   if (home) {
     await $.fs.write(`${home}/${READING_FILE}`, JSON.stringify(latest))
+  }
+}
+
+// A version field from a JSON file, or undefined when the file is missing or
+// not that shape.
+async function readVersion($: EngineInterface, path: string) {
+  try {
+    const { version } = JSON.parse(await $.fs.read(path))
+
+    return typeof version === 'string' ? version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isOlder(version: string, than: string) {
+  const a = version.split('.').map(Number)
+  const b = than.split('.').map(Number)
+
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0)
+
+    if (diff) {
+      return diff < 0
+    }
+  }
+
+  return false
+}
+
+// The plugin ships the extension; once the plugin updates, say so if the
+// installed extension is behind the copy it ships. No extension file means the
+// person does not use the status bar, and says nothing.
+async function nudgeOutdatedExtension($: EngineInterface) {
+  const home = await homeDir($)
+  const installed = home && (await readVersion($, `${home}/${EXTENSION_FILE}`))
+  const bundled = await readVersion($, `${$.plugin.root}/vscode/package.json`)
+
+  if (installed && bundled && isOlder(installed, bundled)) {
+    $.ui.toast(
+      `Usage meter: the VS Code status bar is out of date (${installed}, now ${bundled}). Run /usage-meter:setup-vscode to update it.`,
+    )
   }
 }
 
@@ -80,6 +127,8 @@ export const register: Register = on => {
         await update($, reading, current => current ?? stored)
       }
     }
+
+    await nudgeOutdatedExtension($)
 
     return next(e)
   })

@@ -2,7 +2,7 @@
   "name": "usage-meter-statusbar",
   "displayName": "Claude usage meter",
   "description": "Shows your Claude plan usage (5-hour and weekly) in the status bar, from the usage-meter Claude Code plugin.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "azoni",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/azoni/claude-usage-meter" },

@@ -49,7 +49,34 @@ claude plugin install usage-meter@claude-usage-meter
 Then, if the person uses VS Code or Cursor, follow
 [skills/setup-vscode/SKILL.md](skills/setup-vscode/SKILL.md) to install
 `vscode/usage-meter-statusbar.vsix`. New sessions load the plugin by themselves; if the
-current one doesn't show the meter, run `/reload-plugins` or start a new session.
+current one doesn't show the meter, run `/reload-plugins` or start a new session. Offer to
+turn on auto-update (below); don't change their settings without asking.
+
+## Updates
+
+Claude Code doesn't auto-update plugins from community marketplaces unless you turn it on.
+Either switch on auto-update for `claude-usage-meter` in `/plugin` (Marketplaces), or add
+`"autoUpdate": true` to its entry in `~/.claude/settings.json`:
+
+```json
+"extraKnownMarketplaces": {
+  "claude-usage-meter": {
+    "source": { "source": "github", "repo": "azoni/claude-usage-meter" },
+    "autoUpdate": true
+  }
+}
+```
+
+To update by hand instead, then restart Claude Code:
+
+```
+claude plugin marketplace update claude-usage-meter
+claude plugin update usage-meter@claude-usage-meter
+```
+
+The VS Code extension can't update itself, because it's installed from a file. When the
+plugin updates and ships a newer one, Claude Code shows a one-line note at startup. Run
+`/usage-meter:setup-vscode` to install the new one.
 
 ## Good to know
 
@@ -70,6 +97,7 @@ current one doesn't show the meter, run `/reload-plugins` or start a new session
 ```
 claude plugin uninstall usage-meter
 code --uninstall-extension azoni.usage-meter-statusbar
+rm -rf ~/.claude/usage-meter        # the saved reading and version files
 ```
 
 ## Develop

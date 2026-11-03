@@ -93,6 +93,11 @@ function activate(context) {
   const refresh = () => render(item)
 
   fs.mkdirSync(DIR, { recursive: true })
+  // Lets the Claude plugin tell when this extension is older than the copy it
+  // ships. Only that reminder depends on it, so a failed write doesn't stop the meter.
+  try {
+    fs.writeFileSync(path.join(DIR, 'extension.json'), JSON.stringify({ version: context.extension.packageJSON.version }))
+  } catch {}
   const watcher = fs.watch(DIR, refresh)
   // If the folder goes away the watch ends; the timer below keeps drawing.
   watcher.on('error', () => watcher.close())

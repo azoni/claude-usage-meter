@@ -26,9 +26,18 @@ const LIMITS: SessionRateLimit[] = [
   { kind: 'seven_day', percentUsed: 91, resetsAt: '2026-11-06T17:00:00.000Z' },
 ]
 
-// Stands in for the engine; returns the files the mod wrote, by path.
-function engine(on: On, rateLimits: SessionRateLimit[]) {
+const EXTENSION_FILE = '/home/me/.claude/usage-meter/extension.json'
+
+// Stands in for the engine. `extension` is the installed VS Code extension's
+// version (none: not installed); the plugin ships `bundled`. Returns the files
+// the mod wrote, by path, and the toasts it raised.
+function engine(
+  on: On,
+  rateLimits: SessionRateLimit[],
+  { extension, bundled = '0.1.1' }: { extension?: string; bundled?: string } = {},
+) {
   const files = new Map<string, string>()
+  const toasts: string[] = []
 
   mock.env(on, { HOME: '/home/me' })
   on('session.usage', () => ({
@@ -37,13 +46,23 @@ function engine(on: On, rateLimits: SessionRateLimit[]) {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('fs.write', (_, e) => (files.set(e.path, e.text), { value: undefined }))
+  on('fs.read', (_, e) => {
+    if (e.path === EXTENSION_FILE && extension) {
+      return { value: JSON.stringify({ version: extension }) }
+    }
+    if (e.path.endsWith('/vscode/package.json')) {
+      return { value: JSON.stringify({ name: 'usage-meter-statusbar', version: bundled }) }
+    }
+    throw new Error(`ENOENT: no such file, ${e.path}`)
+  })
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
 
     return <Text>engine</Text>
   })
 
-  return files
+  return { files, toasts }
 }
 
 const start = { cwd: '/', surface: 'vscode', isInteractive: true } as const
@@ -69,7 +88,7 @@ test('the band shows both windows and when they reset', async ($, on) => {
 test('VS Code leaves the band to the engine and gets the file', async ($, on) => {
   mock.clock(on, { now: NOW })
   mock.store(on)
-  const files = engine(on, LIMITS)
+  const { files } = engine(on, LIMITS)
   await $.session.start(start)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
@@ -84,7 +103,7 @@ test('VS Code leaves the band to the engine and gets the file', async ($, on) =>
 test('a reading that arrives mid-session redraws the band and the file', async ($, on) => {
   mock.clock(on, { now: NOW })
   mock.store(on)
-  const files = engine(on, [])
+  const { files } = engine(on, [])
   await $.session.start(start)
   await $.session.measure({
     context: { window: 200_000 },
@@ -136,3 +155,25 @@ test('with no reading yet the band is left to the engine', async ($, on) => {
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
   await ui.unmount()
 })
+
+test('an older VS Code extension gets one note to update it', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.store(on)
+  const { toasts } = engine(on, LIMITS, { extension: '0.1.0', bundled: '0.1.1' })
+  await $.session.start(start)
+
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).toContain('0.1.0, now 0.1.1')
+  expect(toasts[0]).toContain('/usage-meter:setup-vscode')
+})
+
+for (const extension of ['0.1.1', '0.2.0', '1.0.0', undefined]) {
+  test(`no note when the extension is ${extension ?? 'not installed'}`, async ($, on) => {
+    mock.clock(on, { now: NOW })
+    mock.store(on)
+    const { toasts } = engine(on, LIMITS, { extension, bundled: '0.1.1' })
+    await $.session.start(start)
+
+    expect(toasts).toEqual([])
+  })
+}
