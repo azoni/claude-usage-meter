@@ -97,8 +97,10 @@ plugin updates and ships a newer one, Claude Code shows a one-line note at start
 - **Your login stays with Claude Code.** The plugin reads the figures Claude Code already
   has and saves them to `~/.claude/usage-meter/`. The VS Code item runs the Claude Code
   program that ships with the Claude extension and asks it for usage (the request behind
-  `/usage`). That uses no model tokens and saves no session history. Neither part reads
-  your login or sends anything anywhere else.
+  `/usage`). That uses no model tokens and saves no session history. It runs from a
+  private folder (`~/.claude/usage-meter/run`) with only your own Claude settings loaded,
+  so no project's settings, hooks or MCP servers come along. Neither part reads your
+  login or sends anything anywhere else.
 - **Something wrong?** In VS Code, open the Output panel and pick "Claude usage meter".
   It says why a refresh failed.
 - **Colors.** Green under 60%, yellow from 60%, red from 85%. The VS Code item turns the

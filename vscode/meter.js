@@ -2,11 +2,23 @@
 // asking Claude Code for the plan usage, reading its answer, combining it
 // with the readings Claude sessions save, and what the status bar shows.
 const { spawn } = require('child_process')
+const fs = require('fs')
 const os = require('os')
+const path = require('path')
 
 // The same request the Claude VS Code panel sends for its usage view, with
-// the local transcript scan skipped. It spends no model tokens.
-const ARGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence']
+// the local transcript scan skipped. It spends no model tokens. Only the
+// person's own settings load: a project's settings, hooks and MCP servers
+// stay off, whatever folder claude runs in.
+const ARGS = [
+  '-p',
+  '--input-format', 'stream-json',
+  '--output-format', 'stream-json',
+  '--verbose',
+  '--no-session-persistence',
+  '--setting-sources', 'user',
+  '--strict-mcp-config',
+]
 const REQUEST_ID = 'usage-meter'
 const TIMEOUT_MS = 20 * 1000
 
@@ -18,10 +30,22 @@ const STALE_MS = 15 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
 const WARN_PCT = 85
 
+// A folder only this user can write, for claude to run in. Not the system
+// temp folder: on Linux that is shared, and another user could leave a
+// project there for claude to load.
+function runDir(home = os.homedir()) {
+  const dir = path.join(home, '.claude', 'usage-meter', 'run')
+
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(dir, 0o700)
+
+  return dir
+}
+
 // Resolves the get_usage answer from the claude program at `command`.
-function fetchUsage(command, { shell = false, env = process.env, timeoutMs = TIMEOUT_MS } = {}) {
+function fetchUsage(command, { cwd, shell = false, env = process.env, timeoutMs = TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, ARGS, { cwd: os.tmpdir(), env, shell, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+    const child = spawn(command, ARGS, { cwd: cwd ?? runDir(), env, shell, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
     let buffer = ''
     let isSettled = false
 
@@ -189,4 +213,4 @@ function present(limits, now) {
   }
 }
 
-module.exports = { fetchUsage, mergeReadings, parseUsageResponse, present }
+module.exports = { fetchUsage, mergeReadings, parseUsageResponse, present, runDir }

@@ -1,9 +1,10 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { test } = require('node:test')
 
-const { fetchUsage, mergeReadings, parseUsageResponse, present } = require('../meter')
+const { fetchUsage, mergeReadings, parseUsageResponse, present, runDir } = require('../meter')
 
 const FAKE_CLAUDE = path.join(__dirname, 'fake-claude.js')
 fs.chmodSync(FAKE_CLAUDE, 0o755)
@@ -110,6 +111,22 @@ test('fetches the usage answer from the claude program', async () => {
   const response = await fetchUsage(FAKE_CLAUDE, { env: { ...process.env, FAKE_CLAUDE: 'success' } })
 
   assert.equal(response.rate_limits.limits[0].percent, 24)
+})
+
+test('claude runs in a private folder with project settings and MCP servers off', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'meter-'))
+  const { argv, cwd: ranIn } = await fetchUsage(FAKE_CLAUDE, { cwd, env: { ...process.env, FAKE_CLAUDE: 'args' } })
+
+  assert.equal(fs.realpathSync(ranIn), fs.realpathSync(cwd))
+  assert.deepEqual(argv.slice(argv.indexOf('--setting-sources'), argv.indexOf('--setting-sources') + 2), ['--setting-sources', 'user'])
+  assert.ok(argv.includes('--strict-mcp-config'))
+  assert.ok(argv.includes('--no-session-persistence'))
+})
+
+test('the default folder is created private to the user', () => {
+  const dir = runDir(fs.mkdtempSync(path.join(os.tmpdir(), 'home-')))
+
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700)
 })
 
 test('a refused request, an early exit or no answer each reject', async () => {

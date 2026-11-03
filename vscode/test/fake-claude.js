@@ -16,7 +16,10 @@ process.stdin.once('data', chunk => {
   console.log(JSON.stringify({ type: 'system', subtype: 'hook_started' }))
   console.log('not json')
 
-  if (mode === 'error') {
+  if (mode === 'args') {
+    const response = { argv: process.argv.slice(2), cwd: process.cwd() }
+    console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id, response } }))
+  } else if (mode === 'error') {
     console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id, error: 'get_usage is not supported in this context' } }))
   } else {
     console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: 'someone-else', response: {} } }))
