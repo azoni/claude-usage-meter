@@ -17,7 +17,7 @@ process.stdin.once('data', chunk => {
   console.log('not json')
 
   if (mode === 'args') {
-    const response = { argv: process.argv.slice(2), cwd: process.cwd() }
+    const response = { argv: process.argv.slice(2), cwd: process.cwd(), configDir: process.env.CLAUDE_CONFIG_DIR }
     console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id, response } }))
   } else if (mode === 'error') {
     console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id, error: 'get_usage is not supported in this context' } }))

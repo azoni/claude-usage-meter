@@ -1,6 +1,6 @@
 {
   "name": "usage-meter",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Live Claude plan usage (5-hour and weekly windows, with reset times) above the prompt and in the VS Code status bar",
   "author": { "name": "azoni", "url": "https://github.com/azoni" },
   "homepage": "https://github.com/azoni/claude-usage-meter",

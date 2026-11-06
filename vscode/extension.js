@@ -1,19 +1,16 @@
 // Shows Claude plan usage in the status bar. Two sources feed it: Claude Code
 // itself, asked every couple of minutes (meter.js), and the reading the
 // usage-meter Claude Code plugin saves after each reply. Each window shows
-// whichever is newer.
+// whichever is newer. Each folder in ~/.claude/usage-meter/accounts adds
+// another signed-in account, asked the same way.
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const vscode = require('vscode')
 
-const { fetchUsage, mergeReadings, parseUsageResponse, present } = require('./meter')
+const { accountsDir, fetchUsage, listAccounts, mergeReadings, parseUsageResponse, presentAccounts, usageSources } = require('./meter')
 
 const DIR = path.join(os.homedir(), '.claude', 'usage-meter')
-// Written by the Claude Code plugin after each reply.
-const SESSION_FILE = path.join(DIR, 'reading.json')
-// Written here from Claude Code's own usage answer.
-const USAGE_FILE = path.join(DIR, 'usage.json')
 const POLL_MS = 2 * 60 * 1000
 // A refresh this recent, from this window or another, is fresh enough.
 const FRESH_MS = 60 * 1000
@@ -59,8 +56,14 @@ function claudeCommand() {
     : { command: 'claude', shell: process.platform === 'win32' }
 }
 
+const sources = () => usageSources(DIR, listAccounts(accountsDir()), process.env)
+
 function render(item) {
-  const shown = present(mergeReadings(readReading(SESSION_FILE), readReading(USAGE_FILE)), Date.now())
+  const accounts = sources().map(({ name, file, sessionFile }) => ({
+    name,
+    limits: mergeReadings(sessionFile ? readReading(sessionFile) : null, readReading(file)),
+  }))
+  const shown = presentAccounts(accounts, Date.now())
 
   if (!shown) {
     item.hide()
@@ -81,18 +84,20 @@ function activate(context) {
   const refresh = () => render(item)
   let isPolling = false
   let lastAttempt = 0
-  let lastError
+  const lastErrors = new Map()
 
   // Logs a failure once until it changes, so a steady problem doesn't fill the log.
-  const report = message => {
-    if (message !== lastError) {
-      lastError = message
-      log.appendLine(`${new Date().toISOString()} ${message}`)
+  const report = (name, message) => {
+    if (message !== lastErrors.get(name)) {
+      lastErrors.set(name, message)
+      log.appendLine(`${new Date().toISOString()} ${name}: ${message}`)
     }
   }
 
+  // Asks one account at a time: each is a claude process, and they add up
+  // on a small machine. One failing leaves the others to answer.
   const poll = async minAge => {
-    if (isPolling || Date.now() - lastAttempt < minAge || ageOf(USAGE_FILE) < minAge) {
+    if (isPolling || Date.now() - lastAttempt < minAge) {
       return
     }
 
@@ -101,16 +106,25 @@ function activate(context) {
 
     try {
       const { command, shell } = claudeCommand()
-      const reading = parseUsageResponse(await fetchUsage(command, { shell }), Date.now())
 
-      if (reading) {
-        fs.writeFileSync(USAGE_FILE, JSON.stringify(reading))
-        lastError = undefined
-      } else {
-        report('Claude Code answered with no usage windows: an API key or a cloud provider has none.')
+      for (const { name, file, env } of sources()) {
+        if (ageOf(file) < minAge) {
+          continue
+        }
+
+        try {
+          const reading = parseUsageResponse(await fetchUsage(command, { shell, env }), Date.now())
+
+          if (reading) {
+            fs.writeFileSync(file, JSON.stringify(reading))
+            lastErrors.delete(name)
+          } else {
+            report(name, 'Claude Code answered with no usage windows: it is signed out, or an API key or a cloud provider has none.')
+          }
+        } catch (error) {
+          report(name, `Could not ask Claude Code for usage: ${error.message}`)
+        }
       }
-    } catch (error) {
-      report(`Could not ask Claude Code for usage: ${error.message}`)
     } finally {
       isPolling = false
     }

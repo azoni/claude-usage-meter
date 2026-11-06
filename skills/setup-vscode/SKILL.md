@@ -38,6 +38,15 @@ runs.
 
 `<cli> --uninstall-extension azoni.usage-meter-statusbar`
 
+## More than one account
+
+Each folder in `~/.claude/usage-meter/accounts` is another account, named after the folder.
+To add one, the person signs in once:
+`CLAUDE_CONFIG_DIR=~/.claude/usage-meter/accounts/<name> claude auth login --email <email>`.
+Have them check the sign-in page shows that account before authorizing, then confirm with
+`CLAUDE_CONFIG_DIR=<same folder> claude auth status`. The status bar then shows each account's
+highest window, with the reset time at 85% or more, and the full table for each on hover.
+
 ## When something looks wrong
 
 - Check the Output panel's "Claude usage meter" channel first: it says why a refresh failed.
