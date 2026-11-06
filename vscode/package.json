@@ -2,7 +2,7 @@
   "name": "usage-meter-statusbar",
   "displayName": "Claude usage meter",
   "description": "Shows your Claude plan usage (5-hour, weekly and per-model windows) in the status bar, refreshed from Claude Code.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "azoni",
   "icon": "icon.png",
   "license": "MIT",

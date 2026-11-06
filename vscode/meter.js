@@ -30,16 +30,60 @@ const STALE_MS = 15 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
 const WARN_PCT = 85
 
-// A folder only this user can write, for claude to run in. Not the system
-// temp folder: on Linux that is shared, and another user could leave a
-// project there for claude to load.
-function runDir(home = os.homedir()) {
-  const dir = path.join(home, '.claude', 'usage-meter', 'run')
+const MAIN_NAME = 'Main'
+const ACCOUNT_NAME = /^[\w-]{1,32}$/
+
+function privateDir(home, name) {
+  const dir = path.join(home, '.claude', 'usage-meter', name)
 
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.chmodSync(dir, 0o700)
 
   return dir
+}
+
+// A folder only this user can write, for claude to run in. Not the system
+// temp folder: on Linux that is shared, and another user could leave a
+// project there for claude to load.
+const runDir = (home = os.homedir()) => privateDir(home, 'run')
+
+// Holds one Claude config folder, and so one login, per extra account.
+const accountsDir = (home = os.homedir()) => privateDir(home, 'accounts')
+
+// Each folder in `dir` is an account, named after the folder. The name is
+// shown in the hover and used in a file name, so anything else is skipped.
+function listAccounts(dir) {
+  let entries
+
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  return entries
+    .filter(entry => entry.isDirectory() && ACCOUNT_NAME.test(entry.name))
+    .map(entry => entry.name)
+    .sort()
+    .map(name => ({ name, configDir: path.join(dir, name) }))
+}
+
+// A login in the environment would beat the one in the folder and report the
+// main account's numbers under this account's name.
+function accountEnv(env, configDir) {
+  const { ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, ...rest } = env
+
+  return { ...rest, CLAUDE_CONFIG_DIR: configDir }
+}
+
+// Who to ask for usage, the main login first. Readings are saved in `dir`,
+// not in the accounts' folders, so its watcher sees them. Only the main login
+// has plugin readings: those come from the account Claude Code is using.
+function usageSources(dir, accounts, env) {
+  return [
+    { name: MAIN_NAME, file: path.join(dir, 'usage.json'), sessionFile: path.join(dir, 'reading.json'), env },
+    ...accounts.map(({ name, configDir }) => ({ name, file: path.join(dir, `usage-${name}.json`), env: accountEnv(env, configDir) })),
+  ]
 }
 
 // Resolves the get_usage answer from the claude program at `command`.
@@ -177,25 +221,21 @@ function resetLabel(resetAt, now) {
   return `${day}${time(at)}`
 }
 
-// What the status bar shows for these windows at `now`: { text, tooltip,
-// isWarning }, or null when there is nothing to show.
-function present(limits, now) {
-  if (limits.length === 0) {
-    return null
-  }
-
-  const shown = limits.map(limit => {
+// Each window as it reads at `now`. One that reset since the reading starts
+// again from zero.
+function currentWindows(limits, now) {
+  return limits.map(limit => {
     const resetAt = limit.resetsAt ? Date.parse(limit.resetsAt) : NaN
-    // A window that reset since the reading starts again from zero.
     const hasReset = resetAt <= now
     const pct = hasReset ? 0 : Math.max(0, Math.round(limit.percentUsed))
 
     return { ...limit, pct, resetAt: hasReset ? NaN : resetAt }
   })
-  const worst = Math.max(...shown.map(limit => limit.pct))
-  const newest = Math.max(...shown.map(limit => limit.at))
+}
 
-  const rows = shown.map(limit => {
+function usageTable(windows, now) {
+  const newest = Math.max(...windows.map(limit => limit.at))
+  const rows = windows.map(limit => {
     const filled = Math.min(BAR_CELLS, Math.round((limit.pct / 100) * BAR_CELLS))
     const bar = '▰'.repeat(filled) + '▱'.repeat(BAR_CELLS - filled)
     const reset = Number.isNaN(limit.resetAt) ? '' : resetLabel(limit.resetAt, now)
@@ -206,11 +246,65 @@ function present(limits, now) {
   })
   const age = now - newest > STALE_MS ? `\n\n_As of ${time(new Date(newest))}._` : ''
 
+  return `| Window | | Used | Resets |\n|---|---|--:|---|\n${rows.join('\n')}${age}`
+}
+
+const isHigh = windows => Math.max(...windows.map(limit => limit.pct)) >= WARN_PCT
+
+// What the status bar shows for these windows at `now`: { text, tooltip,
+// isWarning }, or null when there is nothing to show.
+function present(limits, now) {
+  if (limits.length === 0) {
+    return null
+  }
+
+  const windows = currentWindows(limits, now)
+
   return {
-    text: `$(dashboard) ${shown.map(limit => `${nameOf(SHORT, limit)} ${limit.pct}%`).join(' · ')}`,
-    tooltip: `**Claude usage**\n\n| Window | | Used | Resets |\n|---|---|--:|---|\n${rows.join('\n')}${age}`,
-    isWarning: worst >= WARN_PCT,
+    text: `$(dashboard) ${windows.map(limit => `${nameOf(SHORT, limit)} ${limit.pct}%`).join(' · ')}`,
+    tooltip: `**Claude usage**\n\n${usageTable(windows, now)}`,
+    isWarning: isHigh(windows),
   }
 }
 
-module.exports = { fetchUsage, mergeReadings, parseUsageResponse, present, runDir }
+// The window closest to stopping an account. On a tie, the one that resets
+// later: the account stays stuck until that one lets go.
+const tightest = windows =>
+  windows.reduce((top, limit) => (limit.pct > top.pct || (limit.pct === top.pct && limit.resetAt > top.resetAt) ? limit : top))
+
+// The same for several accounts ({ name, limits }). The bar has room for one
+// number each, so it shows the tightest window, not the 5-hour one: an idle
+// account can read 0% there with its week all but gone. Once that number is
+// high, the bar also says when it resets.
+function presentAccounts(accounts, now) {
+  if (accounts.length === 1) {
+    return present(accounts[0].limits, now)
+  }
+
+  const shown = accounts.map(({ name, limits }) => ({ name, windows: currentWindows(limits, now) }))
+  const everyWindow = shown.flatMap(account => account.windows)
+
+  if (everyWindow.length === 0) {
+    return null
+  }
+
+  const inBar = ({ name, windows }) => {
+    if (windows.length === 0) {
+      return `${name} —`
+    }
+
+    const { pct, resetAt } = tightest(windows)
+    const reset = pct >= WARN_PCT && !Number.isNaN(resetAt) ? ` resets ${resetLabel(resetAt, now)}` : ''
+
+    return `${name} ${pct}%${reset}`
+  }
+  const inHover = ({ name, windows }) => `**${name}**\n\n${windows.length > 0 ? usageTable(windows, now) : '_No reading yet._'}`
+
+  return {
+    text: `$(dashboard) ${shown.map(inBar).join(' · ')}`,
+    tooltip: `**Claude usage**\n\n${shown.map(inHover).join('\n\n')}`,
+    isWarning: isHigh(everyWindow),
+  }
+}
+
+module.exports = { accountEnv, accountsDir, fetchUsage, listAccounts, mergeReadings, parseUsageResponse, present, presentAccounts, runDir, usageSources }

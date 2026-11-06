@@ -83,6 +83,32 @@ The VS Code extension can't update itself, because it's installed from a file. W
 plugin updates and ships a newer one, Claude Code shows a one-line note at startup. Run
 `/usage-meter:setup-vscode` to install the new one.
 
+## More than one account
+
+The VS Code item can watch other Claude accounts beside the one you work in. Each account
+gets its own folder under `~/.claude/usage-meter/accounts`, and you sign in to it once:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude/usage-meter/accounts/work claude auth login --email you@example.com
+```
+
+Check that the sign-in page shows the right account before you authorize it. A browser
+already signed in to Claude offers that account, and the meter would then show it twice.
+
+The folder's name is the account's name in the status bar, which switches to one number per
+account: its highest window. An account at 85% or more also shows when that window resets:
+
+```
+Main 68% · work 96% resets Fri 11:59 PM · side —
+```
+
+`—` means no reading yet, usually because that folder isn't signed in. The hover keeps the
+full table for each account, and the item warns when any window on any account reaches 85%.
+Accounts are asked one at a time, so each adds a second or so to a refresh.
+
+To remove one, run `claude auth logout` with the same `CLAUDE_CONFIG_DIR`, then delete its
+folder. The numbers in a Claude session's plugin reading always count toward `Main`.
+
 ## Good to know
 
 - **Subscriptions only.** Pro, Max, Team and Enterprise accounts report these windows. An
@@ -93,7 +119,7 @@ plugin updates and ships a newer one, Claude Code shows a one-line note at start
 - **Early-access APIs.** The plugin uses Claude Code's plugin function hooks, and the VS
   Code item uses Claude Code's `get_usage` request; both are marked early access or
   experimental and may change between releases. If the request stops working, the item
-  falls back to the numbers saved after each reply. Tested on Claude Code 2.1.314–2.1.317.
+  falls back to the numbers saved after each reply. Tested on Claude Code 2.1.314–2.1.318.
 - **Your login stays with Claude Code.** The plugin reads the figures Claude Code already
   has and saves them to `~/.claude/usage-meter/`. The VS Code item runs the Claude Code
   program that ships with the Claude extension and asks it for usage (the request behind

@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { test } = require('node:test')
 
-const { fetchUsage, mergeReadings, parseUsageResponse, present, runDir } = require('../meter')
+const { accountEnv, accountsDir, fetchUsage, listAccounts, mergeReadings, parseUsageResponse, present, presentAccounts, runDir, usageSources } = require('../meter')
 
 const FAKE_CLAUDE = path.join(__dirname, 'fake-claude.js')
 fs.chmodSync(FAKE_CLAUDE, 0o755)
@@ -134,4 +134,145 @@ test('a refused request, an early exit or no answer each reject', async () => {
   await assert.rejects(fetchUsage(FAKE_CLAUDE, { env: { ...process.env, FAKE_CLAUDE: 'exit' } }), /exited/)
   await assert.rejects(fetchUsage(FAKE_CLAUDE, { env: { ...process.env, FAKE_CLAUDE: 'silent' }, timeoutMs: 500 }), /timed out/)
   await assert.rejects(fetchUsage('/no/such/claude'), /ENOENT/)
+})
+
+test('every folder with a usable name is an account, sorted', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accounts-'))
+
+  for (const name of ['work', 'side-2', '.hidden', 'bad name', 'a'.repeat(33)]) {
+    fs.mkdirSync(path.join(dir, name))
+  }
+  fs.writeFileSync(path.join(dir, 'note.txt'), '')
+
+  assert.deepEqual(listAccounts(dir), [
+    { name: 'side-2', configDir: path.join(dir, 'side-2') },
+    { name: 'work', configDir: path.join(dir, 'work') },
+  ])
+  assert.deepEqual(listAccounts(path.join(dir, 'missing')), [])
+})
+
+test('the accounts folder is created private to the user', () => {
+  const dir = accountsDir(fs.mkdtempSync(path.join(os.tmpdir(), 'home-')))
+
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700)
+})
+
+// A login in the environment beats the one in the folder, which would show
+// the main account's numbers under every name.
+test('an account signs in from its own folder, whatever the environment holds', () => {
+  const env = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/old', ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', CLAUDE_CODE_OAUTH_TOKEN: 'o' }
+
+  assert.deepEqual(accountEnv(env, '/accounts/work'), { PATH: '/bin', CLAUDE_CONFIG_DIR: '/accounts/work' })
+  assert.equal(env.CLAUDE_CONFIG_DIR, '/old')
+})
+
+test('claude is told which account to answer for', async () => {
+  const env = accountEnv({ ...process.env, FAKE_CLAUDE: 'args' }, '/accounts/work')
+  const { configDir } = await fetchUsage(FAKE_CLAUDE, { env })
+
+  assert.equal(configDir, '/accounts/work')
+})
+
+test('the main login comes first and alone takes the plugin reading', () => {
+  const env = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/main' }
+  const [main, work, ...rest] = usageSources('/meter', [{ name: 'work', configDir: '/meter/accounts/work' }], env)
+
+  assert.deepEqual(rest, [])
+  assert.deepEqual(main, { name: 'Main', file: '/meter/usage.json', sessionFile: '/meter/reading.json', env })
+  assert.deepEqual(work, { name: 'work', file: '/meter/usage-work.json', env: { PATH: '/bin', CLAUDE_CONFIG_DIR: '/meter/accounts/work' } })
+})
+
+test('with one account the status bar reads as it always has', () => {
+  const limits = mergeReadings(null, parseUsageResponse(RESPONSE, AT))
+
+  assert.equal(presentAccounts([{ name: 'Main', limits }], AT).text, '$(dashboard) 5h 24% · Wk 4% · Fable 0%')
+})
+
+test('each account shows its highest window, and the hover has a table each', () => {
+  const shown = presentAccounts(
+    [
+      { name: 'Main', limits: [{ kind: 'five_hour', percentUsed: 48, at: AT }, { kind: 'seven_day', percentUsed: 66, at: AT }] },
+      { name: 'work', limits: [{ kind: 'five_hour', percentUsed: 12, at: AT }] },
+      { name: 'side', limits: [] },
+    ],
+    AT,
+  )
+
+  assert.equal(shown.text, '$(dashboard) Main 66% · work 12% · side —')
+  assert.equal(shown.isWarning, false)
+  assert.match(shown.tooltip, /\*\*Main\*\*\n\n\| Window[\s\S]*Week \(all models\)[\s\S]*\*\*work\*\*\n\n\| Window/)
+  assert.match(shown.tooltip, /\*\*side\*\*\n\n_No reading yet\._/)
+})
+
+// The case this exists for: a spent week behind an idle 5-hour window.
+test('an account nearly out for the week reads high and says when it resets', () => {
+  const shown = presentAccounts(
+    [
+      { name: 'Main', limits: [{ kind: 'five_hour', percentUsed: 20, at: AT }] },
+      {
+        name: 'work',
+        limits: [
+          { kind: 'five_hour', percentUsed: 0, at: AT },
+          { kind: 'seven_day', percentUsed: 96, resetsAt: new Date(AT + 2 * 86_400_000).toISOString(), at: AT },
+        ],
+      },
+    ],
+    AT,
+  )
+
+  assert.match(shown.text, /^\$\(dashboard\) Main 20% · work 96% resets [A-Z][a-z]{2} \d{1,2}:\d{2}\s?[AP]M$/)
+  assert.equal(shown.isWarning, true)
+})
+
+test('a reset due within the day leaves the weekday out', () => {
+  const limits = [{ kind: 'seven_day', percentUsed: 90, resetsAt: new Date(AT + 3_600_000).toISOString(), at: AT }]
+  const shown = presentAccounts([{ name: 'Main', limits: [] }, { name: 'work', limits }], AT)
+
+  assert.match(shown.text, /work 90% resets \d{1,2}:\d{2}\s?[AP]M$/)
+})
+
+test('below the warning level the bar leaves the reset to the hover', () => {
+  const limits = [{ kind: 'seven_day', percentUsed: 84, resetsAt: new Date(AT + 3_600_000).toISOString(), at: AT }]
+  const shown = presentAccounts([{ name: 'Main', limits: [] }, { name: 'work', limits }], AT)
+
+  assert.equal(shown.text, '$(dashboard) Main — · work 84%')
+})
+
+// Equal numbers: the account stays stuck until the later window lets go.
+test('when two windows tie, the bar shows the later reset', () => {
+  const soon = new Date(AT + 3_600_000).toISOString()
+  const later = new Date(AT + 2 * 86_400_000).toISOString()
+  const limits = [
+    { kind: 'five_hour', percentUsed: 95, resetsAt: soon, at: AT },
+    { kind: 'seven_day', percentUsed: 95, resetsAt: later, at: AT },
+  ]
+  const shown = presentAccounts([{ name: 'Main', limits: [] }, { name: 'work', limits }], AT)
+
+  assert.match(shown.text, /work 95% resets [A-Z][a-z]{2} /)
+})
+
+test('a high window with no reset time shows no reset', () => {
+  const shown = presentAccounts([{ name: 'Main', limits: [] }, { name: 'work', limits: [{ kind: 'seven_day', percentUsed: 90, at: AT }] }], AT)
+
+  assert.equal(shown.text, '$(dashboard) Main — · work 90%')
+})
+
+test('a reset 5-hour window reads zero, and an old reading is dated on its own account', () => {
+  const shown = presentAccounts(
+    [
+      { name: 'Main', limits: [{ kind: 'five_hour', percentUsed: 30, at: AT + 20 * 60_000 }] },
+      { name: 'work', limits: [{ kind: 'five_hour', percentUsed: 70, resetsAt: new Date(AT + 60_000).toISOString(), at: AT }] },
+    ],
+    AT + 20 * 60_000,
+  )
+  const [main, work] = shown.tooltip.split('**work**')
+
+  assert.equal(shown.text, '$(dashboard) Main 30% · work 0%')
+  assert.doesNotMatch(main, /As of/)
+  assert.match(work, /As of/)
+})
+
+test('nothing shows until some account has a reading', () => {
+  assert.equal(presentAccounts([{ name: 'Main', limits: [] }, { name: 'work', limits: [] }], AT), null)
+  assert.equal(presentAccounts([{ name: 'Main', limits: [] }], AT), null)
 })
